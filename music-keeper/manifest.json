@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Music Keeper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Tries to resume playback or skip to the next track on Apple Music and TIDAL.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://music.apple.com/*",
+    "https://tidal.com/*",
     "https://listen.tidal.com/*"
   ],
   "action": {
@@ -16,6 +17,7 @@
     {
       "matches": [
         "https://music.apple.com/*",
+        "https://tidal.com/*",
         "https://listen.tidal.com/*"
       ],
       "js": ["content.js"],

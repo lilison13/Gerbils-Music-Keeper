@@ -32,7 +32,12 @@
 
   function getSiteType() {
     if (location.hostname.includes("music.apple.com")) return "apple";
-    if (location.hostname.includes("listen.tidal.com")) return "tidal";
+    if (
+      location.hostname.includes("tidal.com") ||
+      location.hostname.includes("listen.tidal.com")
+    ) {
+      return "tidal";
+    }
     return "unknown";
   }
 
@@ -59,32 +64,21 @@
         }
       }
     }
-
     return false;
   }
 
   function getSelectors(site) {
     if (site === "tidal") {
       return {
-        play: [
-          'button[aria-label="Play"]',
-          'button[aria-label="Pause"]'
-        ],
-        next: [
-          'button[aria-label="Next"]'
-        ]
+        play: ['button[aria-label="Play"]', 'button[aria-label="Pause"]'],
+        next: ['button[aria-label="Next"]']
       };
     }
 
     if (site === "apple") {
       return {
-        play: [
-          'button[aria-label="Play"]',
-          'button[aria-label="Pause"]'
-        ],
-        next: [
-          'button[aria-label="Next"]'
-        ]
+        play: ['button[aria-label="Play"]', 'button[aria-label="Pause"]'],
+        next: ['button[aria-label="Next"]']
       };
     }
 
