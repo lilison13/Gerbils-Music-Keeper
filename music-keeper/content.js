@@ -46,11 +46,17 @@
 
   function clickIfFound(selectors) {
     for (const selector of selectors) {
-      const el = document.querySelector(selector);
-      if (el) {
-        el.click();
-        log("Clicked:", selector);
-        return true;
+      const elements = document.querySelectorAll(selector);
+
+      for (const el of elements) {
+        const rect = el.getBoundingClientRect();
+
+        // Prefer the sticky bottom player controls over unrelated page buttons.
+        if (rect.bottom > window.innerHeight - 200) {
+          el.click();
+          log("Clicked (player control):", selector);
+          return true;
+        }
       }
     }
 
@@ -58,31 +64,26 @@
   }
 
   function getSelectors(site) {
-    if (site === "apple") {
+    if (site === "tidal") {
       return {
         play: [
-          'button[aria-label*="Play"]',
-          'button[aria-label*="Resume"]',
-          ".web-chrome-playback-controls__playback-btn"
+          'button[aria-label="Play"]',
+          'button[aria-label="Pause"]'
         ],
         next: [
-          'button[aria-label*="Next"]',
-          ".web-chrome-playback-controls__next-btn"
+          'button[aria-label="Next"]'
         ]
       };
     }
 
-    if (site === "tidal") {
+    if (site === "apple") {
       return {
         play: [
-          'button[aria-label*="Play"]',
-          '[data-test="play-button"]',
-          'button[title*="Play"]'
+          'button[aria-label="Play"]',
+          'button[aria-label="Pause"]'
         ],
         next: [
-          'button[aria-label*="Next"]',
-          '[data-test="next-button"]',
-          'button[title*="Next"]'
+          'button[aria-label="Next"]'
         ]
       };
     }
@@ -91,6 +92,11 @@
   }
 
   async function tryResume(media, selectors) {
+    if (media.ended) {
+      log("Media ended -> skipping next");
+      return clickIfFound(selectors.next);
+    }
+
     try {
       await media.play();
       log("media.play() succeeded");
