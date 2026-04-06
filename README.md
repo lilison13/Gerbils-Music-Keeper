@@ -1,153 +1,124 @@
-# 🎧 Music Keeper
+# Music Keeper
 
-A lightweight Chrome extension that keeps your music playing on **TIDAL Web** and **Apple Music Web**.
+Music Keeper is a Chrome extension for Apple Music Web and TIDAL Web.
 
-It automatically resumes playback or skips to the next track if playback stops, gets stuck, or ends.
+It checks playback every few seconds and tries to recover if playback pauses, gets stuck, or stops progressing.
 
----
+## Supported Sites
 
-## 🚀 Features
+- `https://music.apple.com/*`
+- `https://tidal.com/*`
+- `https://listen.tidal.com/*`
 
-- ▶️ Auto-resume when playback pauses unexpectedly  
-- ⏭️ Auto-skip to next track if playback is stuck or ended  
-- 🔁 Periodic health check (configurable interval)  
-- 🎯 Smart targeting of the real player controls (avoids fake play buttons)  
-- 🧠 Works with dynamic SPAs like TIDAL and Apple Music  
+## Current Version
 
----
+- `1.3.2`
 
-## 🌐 Supported Platforms
+## What It Does
 
-- https://tidal.com  
-- https://listen.tidal.com  
-- https://music.apple.com  
+- Monitors playback on supported sites
+- Detects paused playback
+- Detects stalled playback when `currentTime` stops progressing
+- Tries to resume playback automatically
+- Can try `Next` as a fallback after enough time has passed
+- Uses smarter Apple Music control targeting to avoid clicking content play buttons by mistake
+- Stores settings with `chrome.storage.sync`
 
----
+## How Recovery Works
 
-## 🧩 How It Works
+The content script runs a loop every `intervalSec` seconds.
 
-The extension injects a **content script** into supported music sites.
+On each tick it:
 
-It:
+1. Finds the active media element
+2. Checks whether playback is healthy
+3. Detects stalled playback if time is not moving forward
+4. Tries to recover by clicking the player controls or calling `media.play()`
+5. Optionally tries `Next` if playback has been paused or stalled long enough
 
-1. Locates the active `audio` / `video` element  
-2. Checks if playback is:
-   - paused  
-   - ended  
-   - not progressing  
-3. Attempts recovery:
-   - `media.play()`  
-   - fallback: click Play button  
-   - fallback: click Next  
+### Apple Music
 
-To avoid incorrect clicks, it only interacts with controls located in the **bottom player area**.
+- Prefers the top player bar controls
+- Prefers `#apple-music-player` when available
+- Uses the top player UI as a playback signal
+- Supports bootstrap behavior when the top player bar is not visible yet
 
----
+### TIDAL
 
-## ⚙️ Installation (Developer Mode)
+- Keeps the simpler control targeting logic
+- Uses bottom-player style scoring for control selection
 
-1. Open Chrome  
-2. Navigate to:
-chrome://extensions
+## Settings
 
-3. Enable **Developer mode**
-4. Click **Load unpacked**
-5. Select the `music-keeper` folder
+The popup exposes these settings:
 
----
+- `enabled`: turns the extension on or off
+- `intervalSec`: how often the extension checks playback
+- `skipAfterSec`: how long playback can stay paused/stalled before trying `Next`
+- `debug`: enables console logging
 
-## 🧪 Usage
+Default values:
 
-1. Open TIDAL or Apple Music in your browser  
-2. Start playing music  
-3. Click the extension icon and ensure it's enabled  
+| Setting | Default |
+|---|---:|
+| `enabled` | `true` |
+| `intervalSec` | `5` |
+| `skipAfterSec` | `20` |
+| `debug` | `false` |
 
-### Settings
+## Debug Logging
 
-- **Check every X sec** → how often playback is monitored  
-- **If paused for X sec, try Next** → fallback behavior  
+When `debug` is enabled in the popup, the extension logs messages to the page console.
 
----
+Open:
 
-## 🛠️ Configuration
+1. The Apple Music or TIDAL tab
+2. DevTools
+3. `Console`
 
-All settings are stored via `chrome.storage.sync`:
+Look for messages starting with:
 
-| Setting        | Description                          | Default |
-|----------------|--------------------------------------|---------|
-| enabled        | Enable/disable extension             | true    |
-| intervalSec    | Check interval (seconds)             | 5       |
-| skipAfterSec   | Time before trying "Next"            | 5       |
-
----
-
-## 🧠 Known Limitations
-
-- Some browsers may block `media.play()` due to autoplay policies  
-- UI selectors may change if TIDAL / Apple Music update their frontend  
-- Works only on Chromium-based browsers  
-
----
-
-## 🖥️ Compatibility
-
-Works on:
-
-- Google Chrome  
-- Chromium  
-- Microsoft Edge  
-- Brave  
-
-Not supported:
-
-- Firefox (different extension API)
-
----
-
-## 🐛 Debugging
-
-Open DevTools (`F12`) → Console
-
-Look for logs:
+```text
 [Music Keeper]
- 
-Example:
+```
+
+Examples:
+
+```text
 [Music Keeper] Loop started with settings: ...
 [Music Keeper] Detected paused/stalled media
 [Music Keeper] media.play() succeeded
+```
 
+## Installation
 
----
+1. Open `chrome://extensions`
+2. Enable `Developer mode`
+3. Click `Load unpacked`
+4. Select the `music-keeper` folder
 
-## 📦 Project Structure
+## Project Structure
+
+```text
 music-keeper/
-manifest.json
-content.js
-popup.html
-popup.js
-icons/
+  manifest.json
+  content.js
+  popup.html
+  popup.js
+  icons/
+```
 
+## Development Notes
 
----
+- Apple Music and TIDAL are dynamic SPAs, so selectors can change over time
+- Some playback states differ between preview/free and full subscription modes
+- `media.play()` may succeed even when the UI still needs a control click fallback
+- Apple Music may re-render its media element, so recovery logic includes re-query behavior
 
-## 🔮 Future Improvements
+## Local Git Workflow
 
-- 📊 Debug panel inside popup  
-- 🧠 Better stalled stream detection  
-- 🔄 Cross-tab media management  
-- 🌍 Multi-site support (Spotify Web, YouTube Music, etc.)  
-
----
-
-## 🧑‍💻 Development
-
-```bash
-git clone <repo>
-cd music-keeper
-
-Load unpacked in Chrome and start testing.
-
-📄 License
-
-MIT (or whatever you choose)
-
+```powershell
+git add .
+git commit -m "Your message"
+git push
+```
