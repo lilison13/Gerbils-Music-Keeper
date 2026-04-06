@@ -151,17 +151,24 @@
 
   function scoreAppleControl(el) {
     if (!isVisibleElement(el)) return -1;
+    if (!el.closest(".chrome-player__playback-controls")) return -1;
 
     const rect = el.getBoundingClientRect();
     let score = 0;
 
-    // עדיפות גבוהה לאזור העליון של הנגן
     if (rect.top < 120) score += 50;
     if (rect.top < 80) score += 20;
+    if (el.matches(".chrome-player__playback-controls button.playback-play__play")) score += 120;
+    if (el.matches('.chrome-player__playback-controls button[class*="playback-play__play"]')) score += 100;
+    if (el.matches(".chrome-player__playback-controls button.playback-play__pause")) score += 120;
+    if (el.matches('.chrome-player__playback-controls button[class*="playback-play__pause"]')) score += 100;
+    if (el.matches(".chrome-player__playback-controls button.playback-next__next")) score += 110;
+    if (el.matches('.chrome-player__playback-controls button[class*="playback-next__next"]')) score += 90;
 
-    // בדיקה אם יש לידו כפתורי נגן נוספים
     const buttons = [
-      ...document.querySelectorAll('button[aria-label], button[title]')
+      ...document.querySelectorAll(
+        '.chrome-player__playback-controls button[aria-label], .chrome-player__playback-controls button[title], .chrome-player__playback-controls button[class]'
+      )
     ].filter(isVisibleElement);
 
     for (const b of buttons) {
@@ -172,15 +179,15 @@
 
       const aria = b.getAttribute("aria-label") || "";
       const title = b.getAttribute("title") || "";
-      const label = `${aria} ${title}`;
+      const label = `${aria} ${title} ${b.className}`;
 
       if (dy < 40 && dx < 160) {
-        if (/Previous/i.test(label)) score += 25;
-        if (/Next/i.test(label)) score += 25;
+        if (/Previous|prev/i.test(label)) score += 25;
+        if (/Next|next/i.test(label)) score += 25;
         if (/Shuffle/i.test(label)) score += 10;
         if (/Repeat/i.test(label)) score += 10;
-        if (/Pause/i.test(label)) score += 15;
-        if (/Play/i.test(label)) score += 15;
+        if (/Pause|playback-play__pause/i.test(label)) score += 15;
+        if (/Play|playback-play__play/i.test(label)) score += 15;
       }
     }
 
@@ -267,6 +274,8 @@
     if (site === "apple") {
       return {
         play: [
+          ".chrome-player__playback-controls button.playback-play__play",
+          '.chrome-player__playback-controls button[class*="playback-play__play"]',
           "button.playback-play__play",
           'button[class*="playback-play__play"]',
           'button[aria-label="Play"]',
@@ -275,6 +284,8 @@
           'button[title*="Play"]'
         ],
         pause: [
+          ".chrome-player__playback-controls button.playback-play__pause",
+          '.chrome-player__playback-controls button[class*="playback-play__pause"]',
           "button.playback-play__pause",
           'button[class*="playback-play__pause"]',
           'button[aria-label="Pause"]',
@@ -283,6 +294,8 @@
           'button[title*="Pause"]'
         ],
         next: [
+          ".chrome-player__playback-controls button.playback-next__next",
+          '.chrome-player__playback-controls button[class*="playback-next__next"]',
           "button.skip-control__next",
           'button[class*="skip-control__next"]',
           "button.playback-controls__next",
