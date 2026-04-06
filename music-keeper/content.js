@@ -2,16 +2,26 @@
   const DEFAULTS = {
     enabled: true,
     intervalSec: 5,
-    skipAfterSec: 20
+    skipAfterSec: 20,
+    debug: false
   };
 
   let settings = { ...DEFAULTS };
   let timer = null;
   let lastPlayingAt = Date.now();
   let lastActionAt = 0;
+  let actionCooldownMs = 4000;
+  let lastCurrentTime = 0;
+  let lastProgressAt = Date.now();
 
   function log(...args) {
+    if (!settings.debug) return;
     console.log("[Music Keeper]", ...args);
+  }
+
+  function showBadge(text) {
+    if (!settings.debug) return;
+    log("Badge:", text);
   }
 
   async function loadSettings() {
@@ -47,6 +57,18 @@
 
   function isActuallyPlaying(media) {
     return !!media && !media.paused && !media.ended && media.readyState >= 2;
+  }
+
+  function isPlaybackStalled(media, now) {
+    if (!media || media.paused || media.ended) return false;
+
+    if (media.currentTime !== lastCurrentTime) {
+      lastCurrentTime = media.currentTime;
+      lastProgressAt = now;
+      return false;
+    }
+
+    return now - lastProgressAt >= settings.skipAfterSec * 1000;
   }
 
   function isVisibleElement(el) {
@@ -234,31 +256,46 @@
     const selectors = getSelectors(site);
 
     if (!media) {
+      showBadge("");
       log("No media element found");
       return;
     }
 
-    if (isActuallyPlaying(media)) {
+    const stalled = isPlaybackStalled(media, now);
+
+    if (isActuallyPlaying(media) && !stalled) {
+      lastCurrentTime = media.currentTime;
+      lastProgressAt = now;
       lastPlayingAt = now;
+      showBadge("");
       return;
     }
 
-    if (now - lastActionAt < 4000) {
+    if (stalled) {
+      showBadge("STALL");
+      log("Detected stalled playback");
+    }
+
+    if (now - lastActionAt < actionCooldownMs) {
       return;
     }
 
+    showBadge("FIX");
     log("Detected paused/stalled media");
 
     const resumed = await tryResume(media, selectors);
     lastActionAt = now;
+    actionCooldownMs = 4000;
 
     if (resumed) return;
 
-    const pausedForMs = now - lastPlayingAt;
+    const pausedForMs = now - Math.max(lastPlayingAt, lastProgressAt);
     if (pausedForMs >= settings.skipAfterSec * 1000) {
       const skipped = tryNext(selectors);
       if (skipped) {
         lastActionAt = Date.now();
+        actionCooldownMs = 8000;
+        showBadge("NEXT");
       }
     }
   }
