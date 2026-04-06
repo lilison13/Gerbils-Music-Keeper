@@ -52,6 +52,15 @@
   }
 
   function findMedia() {
+    const site = getSiteType();
+    if (site === "apple") {
+      const primaryApplePlayer = document.querySelector("#apple-music-player");
+      if (primaryApplePlayer instanceof HTMLMediaElement) {
+        log("Using primary Apple Music player element");
+        return primaryApplePlayer;
+      }
+    }
+
     const mediaElements = [...document.querySelectorAll("audio, video")];
 
     if (mediaElements.length === 0) {
@@ -128,9 +137,13 @@
 
   function getCandidateButtons(selectors) {
     const out = [];
+    const seen = new Set();
     for (const selector of selectors) {
       for (const el of document.querySelectorAll(selector)) {
-        out.push(el);
+        if (!seen.has(el)) {
+          seen.add(el);
+          out.push(el);
+        }
       }
     }
     return out;
@@ -254,18 +267,26 @@
     if (site === "apple") {
       return {
         play: [
+          "button.playback-play__play",
+          'button[class*="playback-play__play"]',
           'button[aria-label="Play"]',
           'button[title="Play"]',
           'button[aria-label*="Play"]',
           'button[title*="Play"]'
         ],
         pause: [
+          "button.playback-play__pause",
+          'button[class*="playback-play__pause"]',
           'button[aria-label="Pause"]',
           'button[title="Pause"]',
           'button[aria-label*="Pause"]',
           'button[title*="Pause"]'
         ],
         next: [
+          "button.skip-control__next",
+          'button[class*="skip-control__next"]',
+          "button.playback-controls__next",
+          'button[class*="playback-controls__next"]',
           'button[aria-label="Next"]',
           'button[title="Next"]',
           'button[aria-label*="Next"]',
@@ -283,14 +304,15 @@
       return clickIfFound(selectors.next);
     }
 
-    const startTime = media?.currentTime || 0;
+    let activeMedia = media;
+    const startTime = activeMedia?.currentTime || 0;
 
     if (site === "apple") {
       const clickedPlay = clickIfFound(selectors.play);
       if (clickedPlay) {
         log("Apple Music: tried player control before media.play()");
         const progressedAfterClick = await waitForPlaybackProgress(
-          media,
+          activeMedia,
           startTime,
           selectors,
           site
@@ -305,16 +327,20 @@
     }
 
     try {
-      if (!media) {
+      if (!activeMedia || !activeMedia.isConnected) {
+        activeMedia = findMedia();
+      }
+
+      if (!activeMedia) {
         throw new Error("No media element available");
       }
 
-      await media.play();
+      await activeMedia.play();
       log("media.play() succeeded");
 
       const progressed = await waitForPlaybackProgress(
-        media,
-        startTime,
+        activeMedia,
+        activeMedia.currentTime || startTime,
         selectors,
         site
       );
@@ -326,6 +352,34 @@
       log("media.play() resolved but playback did not progress");
     } catch (err) {
       log("media.play() failed:", err?.message || err);
+
+      if (
+        site === "apple" &&
+        /removed from the document|The play\(\) request was interrupted/i.test(
+          err?.message || ""
+        )
+      ) {
+        const refreshedMedia = findMedia();
+        if (refreshedMedia && refreshedMedia !== activeMedia) {
+          try {
+            await refreshedMedia.play();
+            log("Retried media.play() with refreshed Apple player");
+
+            const progressed = await waitForPlaybackProgress(
+              refreshedMedia,
+              refreshedMedia.currentTime || 0,
+              selectors,
+              site
+            );
+            if (progressed) {
+              log("Playback progress confirmed after refreshed Apple player");
+              return true;
+            }
+          } catch (retryErr) {
+            log("Refreshed media.play() failed:", retryErr?.message || retryErr);
+          }
+        }
+      }
     }
 
     return clickIfFound(selectors.play);
