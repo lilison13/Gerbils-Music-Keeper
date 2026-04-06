@@ -52,7 +52,44 @@
   }
 
   function findMedia() {
-    return document.querySelector("audio, video");
+    const mediaElements = [...document.querySelectorAll("audio, video")];
+
+    if (mediaElements.length === 0) {
+      return null;
+    }
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const media of mediaElements) {
+      let score = 0;
+
+      if (media.currentSrc) score += 20;
+      if (media.src) score += 10;
+      if (!media.paused) score += 30;
+      if (!media.ended) score += 10;
+      if (media.readyState >= 2) score += 20;
+      if (Number.isFinite(media.duration) && media.duration > 0) score += 20;
+      if (media.currentTime > 0) score += 15;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = media;
+      }
+    }
+
+    log("Selected media element:", {
+      total: mediaElements.length,
+      bestScore,
+      paused: best?.paused,
+      ended: best?.ended,
+      readyState: best?.readyState,
+      currentTime: best?.currentTime,
+      duration: best?.duration,
+      currentSrc: best?.currentSrc
+    });
+
+    return best;
   }
 
   function isActuallyPlaying(media) {
@@ -231,10 +268,19 @@
       return clickIfFound(selectors.next);
     }
 
+    const startTime = media.currentTime;
+
     try {
       await media.play();
       log("media.play() succeeded");
-      return true;
+
+      const progressed = await waitForPlaybackProgress(media, startTime);
+      if (progressed) {
+        log("Playback progress confirmed after media.play()");
+        return true;
+      }
+
+      log("media.play() resolved but playback did not progress");
     } catch (err) {
       log("media.play() failed:", err?.message || err);
     }
@@ -244,6 +290,24 @@
 
   function tryNext(selectors) {
     return clickIfFound(selectors.next);
+  }
+
+  async function waitForPlaybackProgress(media, startTime, timeoutMs = 1200) {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      if (!media || media.ended) {
+        return false;
+      }
+
+      if (!media.paused && media.currentTime > startTime + 0.05) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async function tick() {
