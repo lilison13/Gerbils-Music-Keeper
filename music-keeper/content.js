@@ -13,6 +13,7 @@
   let actionCooldownMs = 4000;
   let lastCurrentTime = 0;
   let lastProgressAt = Date.now();
+  let lastAppleUiPlayingAt = 0;
 
   function log(...args) {
     if (!settings.debug) return;
@@ -441,6 +442,14 @@
     const appleUiPlaying =
       site === "apple" && hasPrimaryPauseControl(site, selectors);
 
+    if (appleUiPlaying) {
+      if (lastAppleUiPlayingAt === 0) {
+        lastAppleUiPlayingAt = now;
+      }
+    } else {
+      lastAppleUiPlayingAt = 0;
+    }
+
     if (!media && !appleUiPlaying) {
       showBadge("");
       log("No media element found");
@@ -448,6 +457,17 @@
     }
 
     const stalled = media ? isPlaybackStalled(media, now) : false;
+
+    if (site === "apple" && appleUiPlaying && now - lastAppleUiPlayingAt >= 1500) {
+      if (media && media.currentTime !== lastCurrentTime) {
+        lastCurrentTime = media.currentTime;
+        lastProgressAt = now;
+      }
+      lastPlayingAt = now;
+      showBadge("");
+      log("Apple player UI indicates stable playback");
+      return;
+    }
 
     if ((isActuallyPlaying(media) || appleUiPlaying) && !stalled) {
       if (media) {
@@ -473,7 +493,7 @@
 
     const resumed = await tryResume(media, selectors, site);
     lastActionAt = now;
-    actionCooldownMs = 4000;
+    actionCooldownMs = site === "apple" ? 8000 : 4000;
 
     if (resumed) return;
 
