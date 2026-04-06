@@ -49,40 +49,158 @@
     return !!media && !media.paused && !media.ended && media.readyState >= 2;
   }
 
-  function clickIfFound(selectors) {
+  function isVisibleElement(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth
+    );
+  }
+
+  function getCandidateButtons(selectors) {
+    const out = [];
     for (const selector of selectors) {
-      const elements = document.querySelectorAll(selector);
-
-      for (const el of elements) {
-        const rect = el.getBoundingClientRect();
-
-        // Prefer the sticky bottom player controls over unrelated page buttons.
-        if (rect.bottom > window.innerHeight - 200) {
-          el.click();
-          log("Clicked (player control):", selector);
-          return true;
-        }
+      for (const el of document.querySelectorAll(selector)) {
+        out.push(el);
       }
     }
+    return out;
+  }
+
+  function scoreAppleControl(el) {
+    if (!isVisibleElement(el)) return -1;
+
+    const rect = el.getBoundingClientRect();
+    let score = 0;
+
+    // עדיפות גבוהה לאזור העליון של הנגן
+    if (rect.top < 120) score += 50;
+    if (rect.top < 80) score += 20;
+
+    // בדיקה אם יש לידו כפתורי נגן נוספים
+    const buttons = [
+      ...document.querySelectorAll('button[aria-label], button[title]')
+    ].filter(isVisibleElement);
+
+    for (const b of buttons) {
+      if (b === el) continue;
+      const r = b.getBoundingClientRect();
+      const dx = Math.abs(r.left - rect.left);
+      const dy = Math.abs(r.top - rect.top);
+
+      const aria = b.getAttribute("aria-label") || "";
+      const title = b.getAttribute("title") || "";
+      const label = `${aria} ${title}`;
+
+      if (dy < 40 && dx < 160) {
+        if (/Previous/i.test(label)) score += 25;
+        if (/Next/i.test(label)) score += 25;
+        if (/Shuffle/i.test(label)) score += 10;
+        if (/Repeat/i.test(label)) score += 10;
+        if (/Pause/i.test(label)) score += 15;
+        if (/Play/i.test(label)) score += 15;
+      }
+    }
+
+    return score;
+  }
+
+  function scoreTidalControl(el) {
+    if (!isVisibleElement(el)) return -1;
+    const rect = el.getBoundingClientRect();
+    let score = 0;
+
+    if (rect.bottom > window.innerHeight - 220) score += 100;
+    return score;
+  }
+
+  function pickBestControl(selectors, site) {
+    const candidates = getCandidateButtons(selectors);
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const el of candidates) {
+      let score = -1;
+
+      if (site === "apple") {
+        score = scoreAppleControl(el);
+      } else if (site === "tidal") {
+        score = scoreTidalControl(el);
+      } else {
+        score = isVisibleElement(el) ? 1 : -1;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+
+    return best;
+  }
+
+  function clickIfFound(selectors) {
+    const site = getSiteType();
+    const best = pickBestControl(selectors, site);
+
+    if (best) {
+      best.click();
+      log("Clicked best player control:", {
+        site,
+        aria: best.getAttribute("aria-label"),
+        title: best.getAttribute("title"),
+        className: best.className
+      });
+      return true;
+    }
+
     return false;
   }
 
   function getSelectors(site) {
     if (site === "tidal") {
       return {
-        play: ['button[aria-label="Play"]', 'button[aria-label="Pause"]'],
-        next: ['button[aria-label="Next"]']
+        play: ['button[aria-label="Play"]', 'button[title="Play"]'],
+        pause: ['button[aria-label="Pause"]', 'button[title="Pause"]'],
+        next: ['button[aria-label="Next"]', 'button[title="Next"]']
       };
     }
 
     if (site === "apple") {
       return {
-        play: ['button[aria-label="Play"]', 'button[aria-label="Pause"]'],
-        next: ['button[aria-label="Next"]']
+        play: [
+          'button[aria-label="Play"]',
+          'button[title="Play"]',
+          'button[aria-label*="Play"]',
+          'button[title*="Play"]'
+        ],
+        pause: [
+          'button[aria-label="Pause"]',
+          'button[title="Pause"]',
+          'button[aria-label*="Pause"]',
+          'button[title*="Pause"]'
+        ],
+        next: [
+          'button[aria-label="Next"]',
+          'button[title="Next"]',
+          'button[aria-label*="Next"]',
+          'button[title*="Next"]'
+        ]
       };
     }
 
-    return { play: [], next: [] };
+    return { play: [], pause: [], next: [] };
   }
 
   async function tryResume(media, selectors) {
