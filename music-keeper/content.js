@@ -209,6 +209,21 @@
     return best;
   }
 
+  function hasPrimaryPauseControl(site, selectors) {
+    const pauseControl = pickBestControl(selectors.pause, site);
+    const playControl = pickBestControl(selectors.play, site);
+
+    if (!pauseControl) {
+      return false;
+    }
+
+    if (!playControl) {
+      return true;
+    }
+
+    return scoreAppleControl(pauseControl) >= scoreAppleControl(playControl);
+  }
+
   function clickIfFound(selectors) {
     const site = getSiteType();
     const best = pickBestControl(selectors, site);
@@ -262,14 +277,13 @@
     return { play: [], pause: [], next: [] };
   }
 
-  async function tryResume(media, selectors) {
-    if (media.ended) {
+  async function tryResume(media, selectors, site) {
+    if (media?.ended) {
       log("Media ended -> skipping next");
       return clickIfFound(selectors.next);
     }
 
-    const site = getSiteType();
-    const startTime = media.currentTime;
+    const startTime = media?.currentTime || 0;
 
     if (site === "apple") {
       const clickedPlay = clickIfFound(selectors.play);
@@ -277,7 +291,9 @@
         log("Apple Music: tried player control before media.play()");
         const progressedAfterClick = await waitForPlaybackProgress(
           media,
-          startTime
+          startTime,
+          selectors,
+          site
         );
         if (progressedAfterClick) {
           log("Playback progress confirmed after Apple player click");
@@ -289,10 +305,19 @@
     }
 
     try {
+      if (!media) {
+        throw new Error("No media element available");
+      }
+
       await media.play();
       log("media.play() succeeded");
 
-      const progressed = await waitForPlaybackProgress(media, startTime);
+      const progressed = await waitForPlaybackProgress(
+        media,
+        startTime,
+        selectors,
+        site
+      );
       if (progressed) {
         log("Playback progress confirmed after media.play()");
         return true;
@@ -310,11 +335,21 @@
     return clickIfFound(selectors.next);
   }
 
-  async function waitForPlaybackProgress(media, startTime, timeoutMs = 1200) {
+  async function waitForPlaybackProgress(
+    media,
+    startTime,
+    selectors,
+    site,
+    timeoutMs = 1200
+  ) {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
+
+      if (site === "apple" && hasPrimaryPauseControl(site, selectors)) {
+        return true;
+      }
 
       if (!media || media.ended) {
         return false;
@@ -336,18 +371,22 @@
     const media = findMedia();
     const site = getSiteType();
     const selectors = getSelectors(site);
+    const appleUiPlaying =
+      site === "apple" && hasPrimaryPauseControl(site, selectors);
 
-    if (!media) {
+    if (!media && !appleUiPlaying) {
       showBadge("");
       log("No media element found");
       return;
     }
 
-    const stalled = isPlaybackStalled(media, now);
+    const stalled = media ? isPlaybackStalled(media, now) : false;
 
-    if (isActuallyPlaying(media) && !stalled) {
-      lastCurrentTime = media.currentTime;
-      lastProgressAt = now;
+    if ((isActuallyPlaying(media) || appleUiPlaying) && !stalled) {
+      if (media) {
+        lastCurrentTime = media.currentTime;
+        lastProgressAt = now;
+      }
       lastPlayingAt = now;
       showBadge("");
       return;
@@ -365,7 +404,7 @@
     showBadge("FIX");
     log("Detected paused/stalled media");
 
-    const resumed = await tryResume(media, selectors);
+    const resumed = await tryResume(media, selectors, site);
     lastActionAt = now;
     actionCooldownMs = 4000;
 
