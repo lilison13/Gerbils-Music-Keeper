@@ -268,7 +268,25 @@
       return clickIfFound(selectors.next);
     }
 
+    const site = getSiteType();
     const startTime = media.currentTime;
+
+    if (site === "apple") {
+      const clickedPlay = clickIfFound(selectors.play);
+      if (clickedPlay) {
+        log("Apple Music: tried player control before media.play()");
+        const progressedAfterClick = await waitForPlaybackProgress(
+          media,
+          startTime
+        );
+        if (progressedAfterClick) {
+          log("Playback progress confirmed after Apple player click");
+          return true;
+        }
+
+        log("Apple player click did not produce playback progress");
+      }
+    }
 
     try {
       await media.play();
