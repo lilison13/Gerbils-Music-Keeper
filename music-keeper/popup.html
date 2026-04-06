@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Music Keeper</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      min-width: 260px;
+      padding: 14px;
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .row {
+      margin-bottom: 10px;
+    }
+
+    input[type="number"] {
+      width: 80px;
+    }
+
+    .small {
+      color: #666;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <label>
+    <input type="checkbox" id="enabled">
+    Enable Music Keeper
+  </label>
+
+  <div class="row">
+    <label>
+      Check every
+      <input type="number" id="intervalSec" min="2" max="60">
+      sec
+    </label>
+  </div>
+
+  <div class="row">
+    <label>
+      If paused for
+      <input type="number" id="skipAfterSec" min="5" max="300">
+      sec, try Next
+    </label>
+  </div>
+
+  <div class="small">
+    Works only on Apple Music Web and TIDAL Web.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,167 @@
+(() => {
+  const DEFAULTS = {
+    enabled: true,
+    intervalSec: 5,
+    skipAfterSec: 20
+  };
+
+  let settings = { ...DEFAULTS };
+  let timer = null;
+  let lastPlayingAt = Date.now();
+  let lastActionAt = 0;
+
+  function log(...args) {
+    console.log("[Music Keeper]", ...args);
+  }
+
+  async function loadSettings() {
+    const data = await chrome.storage.sync.get(DEFAULTS);
+    settings = { ...DEFAULTS, ...data };
+    restartLoop();
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "sync") return;
+
+    for (const [key, value] of Object.entries(changes)) {
+      settings[key] = value.newValue;
+    }
+
+    restartLoop();
+  });
+
+  function getSiteType() {
+    if (location.hostname.includes("music.apple.com")) return "apple";
+    if (location.hostname.includes("listen.tidal.com")) return "tidal";
+    return "unknown";
+  }
+
+  function findMedia() {
+    return document.querySelector("audio, video");
+  }
+
+  function isActuallyPlaying(media) {
+    return !!media && !media.paused && !media.ended && media.readyState >= 2;
+  }
+
+  function clickIfFound(selectors) {
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (el) {
+        el.click();
+        log("Clicked:", selector);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function getSelectors(site) {
+    if (site === "apple") {
+      return {
+        play: [
+          'button[aria-label*="Play"]',
+          'button[aria-label*="Resume"]',
+          ".web-chrome-playback-controls__playback-btn"
+        ],
+        next: [
+          'button[aria-label*="Next"]',
+          ".web-chrome-playback-controls__next-btn"
+        ]
+      };
+    }
+
+    if (site === "tidal") {
+      return {
+        play: [
+          'button[aria-label*="Play"]',
+          '[data-test="play-button"]',
+          'button[title*="Play"]'
+        ],
+        next: [
+          'button[aria-label*="Next"]',
+          '[data-test="next-button"]',
+          'button[title*="Next"]'
+        ]
+      };
+    }
+
+    return { play: [], next: [] };
+  }
+
+  async function tryResume(media, selectors) {
+    try {
+      await media.play();
+      log("media.play() succeeded");
+      return true;
+    } catch (err) {
+      log("media.play() failed:", err?.message || err);
+    }
+
+    return clickIfFound(selectors.play);
+  }
+
+  function tryNext(selectors) {
+    return clickIfFound(selectors.next);
+  }
+
+  async function tick() {
+    if (!settings.enabled) return;
+    if (document.hidden) return;
+
+    const now = Date.now();
+    const media = findMedia();
+    const site = getSiteType();
+    const selectors = getSelectors(site);
+
+    if (!media) {
+      log("No media element found");
+      return;
+    }
+
+    if (isActuallyPlaying(media)) {
+      lastPlayingAt = now;
+      return;
+    }
+
+    if (now - lastActionAt < 4000) {
+      return;
+    }
+
+    log("Detected paused/stalled media");
+
+    const resumed = await tryResume(media, selectors);
+    lastActionAt = now;
+
+    if (resumed) return;
+
+    const pausedForMs = now - lastPlayingAt;
+    if (pausedForMs >= settings.skipAfterSec * 1000) {
+      const skipped = tryNext(selectors);
+      if (skipped) {
+        lastActionAt = Date.now();
+      }
+    }
+  }
+
+  function restartLoop() {
+    if (timer) clearInterval(timer);
+    if (!settings.enabled) return;
+
+    timer = setInterval(tick, Math.max(2, settings.intervalSec) * 1000);
+    log("Loop started with settings:", settings);
+  }
+
+  loadSettings();
+
+  const observer = new MutationObserver(() => {
+    // Useful because these sites are SPA-like and their DOM changes a lot.
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true
+  });
+})();
