@@ -120,6 +120,8 @@
 
   function isVisibleElement(el) {
     if (!el) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
 
@@ -150,25 +152,45 @@
     return out;
   }
 
+  function hasAppleTopPlayerBar() {
+    return !!document.querySelector(".chrome-player__playback-controls");
+  }
+
   function scoreAppleControl(el) {
     if (!isVisibleElement(el)) return -1;
-    if (!el.closest(".chrome-player__playback-controls")) return -1;
 
     const rect = el.getBoundingClientRect();
+    const topPlayerBarPresent = hasAppleTopPlayerBar();
+    const inTopControls = !!el.closest(".chrome-player__playback-controls");
     let score = 0;
+
+    if (topPlayerBarPresent && !inTopControls) return -1;
 
     if (rect.top < 120) score += 50;
     if (rect.top < 80) score += 20;
+    if (!topPlayerBarPresent) {
+      if (rect.top > 80 && rect.top < window.innerHeight * 0.8) score += 25;
+      if (rect.left > 180) score += 20;
+      if (rect.width >= 24 && rect.height >= 24) score += 10;
+    }
     if (el.matches(".chrome-player__playback-controls button.playback-play__play")) score += 120;
     if (el.matches('.chrome-player__playback-controls button[class*="playback-play__play"]')) score += 100;
     if (el.matches(".chrome-player__playback-controls button.playback-play__pause")) score += 120;
     if (el.matches('.chrome-player__playback-controls button[class*="playback-play__pause"]')) score += 100;
     if (el.matches(".chrome-player__playback-controls button.playback-next__next")) score += 110;
     if (el.matches('.chrome-player__playback-controls button[class*="playback-next__next"]')) score += 90;
+    if (!topPlayerBarPresent) {
+      const label = `${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""} ${el.className}`;
+      if (/Play/i.test(label)) score += 40;
+      if (/Pause/i.test(label)) score += 20;
+      if (/Next/i.test(label)) score += 10;
+    }
 
     const buttons = [
       ...document.querySelectorAll(
-        '.chrome-player__playback-controls button[aria-label], .chrome-player__playback-controls button[title], .chrome-player__playback-controls button[class]'
+        topPlayerBarPresent
+          ? '.chrome-player__playback-controls button[aria-label], .chrome-player__playback-controls button[title], .chrome-player__playback-controls button[class]'
+          : 'button[aria-label], button[title], button[class]'
       )
     ].filter(isVisibleElement);
 
