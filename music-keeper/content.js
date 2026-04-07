@@ -1,10 +1,11 @@
 (() => {
   const DEFAULTS = {
-    enabled: true,
-    intervalSec: 5,
-    stallThresholdSec: 12,
-    skipAfterSec: 20,
-    debug: false
+  enabled: true,
+  intervalSec: 5,
+  stallThresholdSec: 12,
+  skipAfterSec: 20,
+  log: true,
+  debug: false
   };
 
   let settings = { ...DEFAULTS };
@@ -24,13 +25,17 @@
   let lastKnownMediaSignature = null;
 
   function log(...args) {
-    if (!settings.debug) return;
-    console.log("[MusicKeeper]", ...args);
+  if (!settings.log) return;
+  console.log("[MusicKeeper]", ...args);
+  }
+
+  function debug(...args) {
+  if (!settings.log || !settings.debug) return;
+  console.log("[MusicKeeper:debug]", ...args);
   }
 
   function showBadge(text) {
-    // no-op בטוח. לא שוברים content script עם chrome.action
-    if (settings.debug) log("Badge:", text);
+  debug("Badge:", text);
   }
 
   function clampNumber(value, fallback, min, max) {
@@ -42,6 +47,7 @@
   function normalizeSettings(raw) {
     const normalized = {
       enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULTS.enabled,
+      log: typeof raw.log === "boolean" ? raw.log : DEFAULTS.log,
       debug: typeof raw.debug === "boolean" ? raw.debug : DEFAULTS.debug,
       intervalSec: clampNumber(raw.intervalSec, DEFAULTS.intervalSec, 1, 300),
       stallThresholdSec: clampNumber(
@@ -103,7 +109,7 @@
     const sig = getMediaSignature(media);
     if (sig && sig !== lastKnownMediaSignature) {
       lastKnownMediaSignature = sig;
-      log("Media switched:", {
+      debug("Media switched:", {
         sig,
         paused: media?.paused,
         ended: media?.ended,
@@ -356,14 +362,14 @@
       }
     }
 
-    if (settings.debug && best) {
-      log("Best control picked:", {
-        site,
-        bestScore,
-        aria: best.getAttribute("aria-label"),
-        title: best.getAttribute("title"),
-        className: best.className
-      });
+    if (best) {
+    debug("Best control picked:", {
+    site,
+    bestScore,
+    aria: best.getAttribute("aria-label"),
+    title: best.getAttribute("title"),
+    className: best.className
+    });
     }
 
     return best;
@@ -402,7 +408,7 @@
       return true;
     }
 
-    log("No suitable control found for click");
+    debug("No suitable control found for click");
     return false;
   }
 
@@ -624,7 +630,7 @@
 
   async function tick() {
     if (tickInFlight) {
-      log("Skipping tick: previous tick still running");
+      debug("Skipping tick: previous tick still running");
       return;
     }
 
@@ -726,7 +732,7 @@
     loopRunning = true;
     stopLoop = false;
 
-    log("Loop started with settings:", settings);
+    debug("Loop started with settings:", settings);
 
     while (!stopLoop) {
       await tick();
@@ -747,7 +753,7 @@
     stopLoop = true;
 
     if (!settings.enabled) {
-      log("Loop stopped: extension disabled");
+      debug("Loop stopped: extension disabled");
       return;
     }
 
