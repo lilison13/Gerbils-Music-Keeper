@@ -6,7 +6,7 @@
   <style>
     body {
       font-family: Arial, sans-serif;
-      min-width: 260px;
+      min-width: 280px;
       padding: 14px;
     }
 
@@ -28,6 +28,13 @@
     .small {
       color: #666;
       font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: bold;
+      margin: 14px 0 8px;
     }
   </style>
 </head>
@@ -40,25 +47,42 @@
   <div class="row">
     <label>
       Check every
-      <input type="number" id="intervalSec" min="2" max="60">
+      <input type="number" id="intervalSec" min="1" max="300">
       sec
     </label>
   </div>
 
   <div class="row">
     <label>
-      If paused for
-      <input type="number" id="skipAfterSec" min="5" max="300">
+      Detect stall after
+      <input type="number" id="stallThresholdSec" min="2" max="300">
+      sec
+    </label>
+  </div>
+
+  <div class="row">
+    <label>
+      If still stuck for
+      <input type="number" id="skipAfterSec" min="3" max="300">
       sec, try Next
     </label>
   </div>
 
+  <div class="section-title">Logging</div>
+
+  <label>
+    <input type="checkbox" id="log">
+    Enable logs
+  </label>
+
   <label>
     <input type="checkbox" id="debug">
-    Enable debug logging
+    Enable debug details
   </label>
 
   <div class="small">
+    Logs = important playback events.<br>
+    Debug = internal selector/scoring details.<br><br>
     Works only on Apple Music Web and TIDAL Web.
   </div>
 
