@@ -2,245 +2,743 @@
   const DEFAULTS = {
     enabled: true,
     intervalSec: 5,
-    stallThresholdSec: 10,   // NEW - זמן לזיהוי תקיעה
-    skipAfterSec: 20,        // זמן לפני NEXT
+    stallThresholdSec: 12, // NEW: זיהוי תקיעה
+    skipAfterSec: 20,      // מתי מותר לעבור NEXT
     debug: false
   };
 
   let settings = { ...DEFAULTS };
-  let running = false;
 
-  let lastPlayingAt = 0;
+  let loopRunning = false;
+  let stopLoop = false;
+  let tickInFlight = false;
+  let wakeSoon = false;
+
+  let lastPlayingAt = Date.now();
   let lastActionAt = 0;
+  let actionCooldownMs = 4000;
   let lastCurrentTime = 0;
-  let lastProgressAt = 0;
+  let lastProgressAt = Date.now();
   let lastAppleUiPlayingAt = 0;
-
-  let loopActive = false;
-
-  const ACTION_COOLDOWN = 4000;
+  let lastKnownMediaSignature = null;
 
   function log(...args) {
-    if (settings.debug) console.log("[MusicKeeper]", ...args);
+    if (!settings.debug) return;
+    console.log("[Music Keeper]", ...args);
   }
 
-  async function showBadge(text) {
+  function showBadge(text) {
+    // content scripts לא אמורים לנהל badge ישירות בלי ארכיטקטורה מתאימה.
+    // לכן כאן זה no-op בטוח, רק ללוג בדיבאג.
+    if (!settings.debug) return;
+    log("Badge:", text);
+  }
+
+  async function loadSettings() {
     try {
-      await chrome.action.setBadgeText({ text });
-      await chrome.action.setBadgeBackgroundColor({ color: "#1DB954" });
-    } catch (e) {
-      log("Badge failed:", e);
+      const data = await chrome.storage.sync.get(DEFAULTS);
+      settings = { ...DEFAULTS, ...data };
+
+      // תאימות לאחור: אם אין stallThresholdSec שמור, אל תשבור כלום
+      if (
+        typeof settings.stallThresholdSec !== "number" ||
+        !Number.isFinite(settings.stallThresholdSec) ||
+        settings.stallThresholdSec < 2
+      ) {
+        settings.stallThresholdSec = Math.min(settings.skipAfterSec, DEFAULTS.stallThresholdSec);
+      }
+
+      restartLoop();
+    } catch (err) {
+      log("Failed to load settings:", err);
+      settings = { ...DEFAULTS };
+      restartLoop();
     }
   }
 
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "sync") return;
+
+    for (const [key, value] of Object.entries(changes)) {
+      settings[key] = value.newValue;
+    }
+
+    if (
+      typeof settings.stallThresholdSec !== "number" ||
+      !Number.isFinite(settings.stallThresholdSec) ||
+      settings.stallThresholdSec < 2
+    ) {
+      settings.stallThresholdSec = Math.min(settings.skipAfterSec, DEFAULTS.stallThresholdSec);
+    }
+
+    restartLoop();
+  });
+
   function getSiteType() {
-    if (location.hostname.includes("apple")) return "apple";
-    if (location.hostname.includes("tidal")) return "tidal";
+    if (location.hostname.includes("music.apple.com")) return "apple";
+    if (
+      location.hostname.includes("tidal.com") ||
+      location.hostname.includes("listen.tidal.com")
+    ) {
+      return "tidal";
+    }
     return "unknown";
   }
 
-  function isVisible(el) {
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+  function getMediaSignature(media) {
+    if (!media) return null;
+    const src = media.currentSrc || media.src || "";
+    const dur = Number.isFinite(media.duration) ? media.duration.toFixed(2) : "na";
+    return `${media.tagName}|${src}|${dur}`;
   }
 
   function findMedia() {
-    const media = [...document.querySelectorAll("audio, video")];
+    const site = getSiteType();
+
+    if (site === "apple") {
+      const primaryApplePlayer = document.querySelector("#apple-music-player");
+      if (primaryApplePlayer instanceof HTMLMediaElement) {
+        const sig = getMediaSignature(primaryApplePlayer);
+        if (sig && sig !== lastKnownMediaSignature) {
+          log("Using primary Apple Music player element");
+          lastKnownMediaSignature = sig;
+        }
+        return primaryApplePlayer;
+      }
+    }
+
+    const mediaElements = [...document.querySelectorAll("audio, video")];
+    if (mediaElements.length === 0) {
+      return null;
+    }
 
     let best = null;
     let bestScore = -1;
 
-    for (const m of media) {
+    for (const media of mediaElements) {
       let score = 0;
 
-      if (m.currentSrc) score += 5;
-      if (!m.paused) score += 5;
-      if (!m.ended) score += 3;
-      if (m.readyState >= 2) score += 3;
-      if (m.currentTime > 0) score += 2;
+      if (media.currentSrc) score += 20;
+      if (media.src) score += 10;
+      if (!media.paused) score += 30;
+      if (!media.ended) score += 10;
+      if (media.readyState >= 2) score += 20;
+      if (Number.isFinite(media.duration) && media.duration > 0) score += 20;
+      if (media.currentTime > 0) score += 15;
+      if (media.volume > 0) score += 5;
+      if (media.muted === false) score += 3;
 
       if (score > bestScore) {
         bestScore = score;
-        best = m;
+        best = media;
       }
+    }
+
+    const sig = getMediaSignature(best);
+    if (sig && sig !== lastKnownMediaSignature) {
+      log("Selected media element:", {
+        total: mediaElements.length,
+        bestScore,
+        paused: best?.paused,
+        ended: best?.ended,
+        readyState: best?.readyState,
+        currentTime: best?.currentTime,
+        duration: best?.duration,
+        currentSrc: best?.currentSrc
+      });
+      lastKnownMediaSignature = sig;
     }
 
     return best;
   }
 
   function isActuallyPlaying(media) {
-    return media && !media.paused && !media.ended && media.readyState >= 2;
+    return !!media && !media.paused && !media.ended && media.readyState >= 2;
+  }
+
+  function updateProgressState(media, now) {
+    if (!media) return false;
+
+    const changed = media.currentTime !== lastCurrentTime;
+    if (changed) {
+      lastCurrentTime = media.currentTime;
+      lastProgressAt = now;
+    }
+    return changed;
   }
 
   function isPlaybackStalled(media, now) {
     if (!media || media.paused || media.ended) return false;
 
-    if (media.currentTime !== lastCurrentTime) {
-      lastCurrentTime = media.currentTime;
-      lastProgressAt = now;
+    if (updateProgressState(media, now)) {
       return false;
     }
 
-    return (now - lastProgressAt) >= settings.stallThresholdSec * 1000;
+    return now - lastProgressAt >= settings.stallThresholdSec * 1000;
+  }
+
+  function isVisibleElement(el) {
+    if (!el) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      style.opacity !== "0" &&
+      rect.bottom > 0 &&
+      rect.right > 0 &&
+      rect.top < window.innerHeight &&
+      rect.left < window.innerWidth
+    );
+  }
+
+  function getCandidateButtons(selectors) {
+    const out = [];
+    const seen = new Set();
+
+    for (const selector of selectors) {
+      for (const el of document.querySelectorAll(selector)) {
+        if (!seen.has(el)) {
+          seen.add(el);
+          out.push(el);
+        }
+      }
+    }
+
+    return out;
+  }
+
+  function hasAppleTopPlayerBar() {
+    return !!document.querySelector(".chrome-player__playback-controls");
+  }
+
+  function scoreAppleControl(el) {
+    if (!isVisibleElement(el)) return -1;
+
+    const rect = el.getBoundingClientRect();
+    const topPlayerBarPresent = hasAppleTopPlayerBar();
+    const inTopControls = !!el.closest(".chrome-player__playback-controls");
+    let score = 0;
+
+    // אם יש top player bar, לא לגעת בכפתורים מהרשימה/preview
+    if (topPlayerBarPresent && !inTopControls) return -1;
+
+    if (rect.top < 120) score += 50;
+    if (rect.top < 80) score += 20;
+
+    if (!topPlayerBarPresent) {
+      if (rect.top > 80 && rect.top < window.innerHeight * 0.8) score += 25;
+      if (rect.left > 180) score += 20;
+      if (rect.width >= 24 && rect.height >= 24) score += 10;
+    }
+
+    if (el.matches(".chrome-player__playback-controls button.playback-play__play")) score += 120;
+    if (el.matches('.chrome-player__playback-controls button[class*="playback-play__play"]')) score += 100;
+    if (el.matches(".chrome-player__playback-controls button.playback-play__pause")) score += 120;
+    if (el.matches('.chrome-player__playback-controls button[class*="playback-play__pause"]')) score += 100;
+    if (el.matches(".chrome-player__playback-controls button.playback-next__next")) score += 110;
+    if (el.matches('.chrome-player__playback-controls button[class*="playback-next__next"]')) score += 90;
+
+    if (!topPlayerBarPresent) {
+      const label = `${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""} ${el.className}`;
+      if (/Play/i.test(label)) score += 40;
+      if (/Pause/i.test(label)) score += 20;
+      if (/Next/i.test(label)) score += 10;
+    }
+
+    const buttons = [
+      ...document.querySelectorAll(
+        topPlayerBarPresent
+          ? '.chrome-player__playback-controls button[aria-label], .chrome-player__playback-controls button[title], .chrome-player__playback-controls button[class]'
+          : 'button[aria-label], button[title], button[class]'
+      )
+    ].filter(isVisibleElement);
+
+    for (const b of buttons) {
+      if (b === el) continue;
+
+      const r = b.getBoundingClientRect();
+      const dx = Math.abs(r.left - rect.left);
+      const dy = Math.abs(r.top - rect.top);
+
+      const aria = b.getAttribute("aria-label") || "";
+      const title = b.getAttribute("title") || "";
+      const label = `${aria} ${title} ${b.className}`;
+
+      if (dy < 40 && dx < 160) {
+        if (/Previous|prev/i.test(label)) score += 25;
+        if (/Next|next/i.test(label)) score += 25;
+        if (/Shuffle/i.test(label)) score += 10;
+        if (/Repeat/i.test(label)) score += 10;
+        if (/Pause|playback-play__pause/i.test(label)) score += 15;
+        if (/Play|playback-play__play/i.test(label)) score += 15;
+      }
+    }
+
+    return score;
+  }
+
+  function scoreTidalControl(el) {
+    if (!isVisibleElement(el)) return -1;
+
+    const rect = el.getBoundingClientRect();
+    let score = 0;
+
+    // ב-TIDAL הנגן העיקרי למטה; נעדיף controls בתחתית
+    if (rect.bottom > window.innerHeight - 220) score += 100;
+    if (rect.bottom > window.innerHeight - 140) score += 30;
+    if (rect.width >= 20 && rect.height >= 20) score += 10;
+
+    const label = `${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""} ${el.className}`;
+    if (/Play/i.test(label)) score += 20;
+    if (/Pause/i.test(label)) score += 20;
+    if (/Next/i.test(label)) score += 20;
+
+    return score;
+  }
+
+  function pickBestControl(selectors, site) {
+    const candidates = getCandidateButtons(selectors);
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const el of candidates) {
+      let score = -1;
+
+      if (site === "apple") {
+        score = scoreAppleControl(el);
+      } else if (site === "tidal") {
+        score = scoreTidalControl(el);
+      } else {
+        score = isVisibleElement(el) ? 1 : -1;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+
+    if (settings.debug && best) {
+      log("Best control picked:", {
+        site,
+        bestScore,
+        aria: best.getAttribute("aria-label"),
+        title: best.getAttribute("title"),
+        className: best.className
+      });
+    }
+
+    return best;
+  }
+
+  function hasPrimaryPauseControl(site, selectors) {
+    const pauseControl = pickBestControl(selectors.pause, site);
+    const playControl = pickBestControl(selectors.play, site);
+
+    if (!pauseControl) return false;
+    if (!playControl) return true;
+
+    if (site === "apple") {
+      return scoreAppleControl(pauseControl) >= scoreAppleControl(playControl);
+    }
+
+    if (site === "tidal") {
+      return scoreTidalControl(pauseControl) >= scoreTidalControl(playControl);
+    }
+
+    return true;
+  }
+
+  function clickIfFound(selectors) {
+    const site = getSiteType();
+    const best = pickBestControl(selectors, site);
+
+    if (best) {
+      best.click();
+      log("Clicked best player control:", {
+        site,
+        aria: best.getAttribute("aria-label"),
+        title: best.getAttribute("title"),
+        className: best.className
+      });
+      return true;
+    }
+
+    return false;
   }
 
   function getSelectors(site) {
     if (site === "tidal") {
       return {
-        play: ['[aria-label="Play"]', '[title="Play"]'],
-        pause: ['[aria-label="Pause"]', '[title="Pause"]'],
-        next: ['[aria-label="Next"]', '[title="Next"]']
+        play: [
+          'button[aria-label="Play"]',
+          'button[title="Play"]',
+          'button[aria-label*="Play"]',
+          'button[title*="Play"]',
+          '[data-type="button"] button[aria-label="Play"]',
+          '[data-test*="play"] button',
+          'button[class*="play"]'
+        ],
+        pause: [
+          'button[aria-label="Pause"]',
+          'button[title="Pause"]',
+          'button[aria-label*="Pause"]',
+          'button[title*="Pause"]',
+          '[data-test*="pause"] button',
+          'button[class*="pause"]'
+        ],
+        next: [
+          'button[aria-label="Next"]',
+          'button[title="Next"]',
+          'button[aria-label*="Next"]',
+          'button[title*="Next"]',
+          '[data-test*="next"] button',
+          'button[class*="next"]',
+          'button[aria-label*="Skip"]'
+        ]
       };
     }
 
-    return {
-      play: [
-        '.playback-play__play',
-        '[aria-label*="Play"]'
-      ],
-      pause: [
-        '.playback-play__pause',
-        '[aria-label*="Pause"]'
-      ],
-      next: [
-        '.playback-next__next',
-        '[aria-label*="Next"]'
-      ]
-    };
-  }
-
-  function pickBest(selectors) {
-    const candidates = [];
-
-    selectors.forEach(sel => {
-      document.querySelectorAll(sel).forEach(el => {
-        if (isVisible(el)) candidates.push(el);
-      });
-    });
-
-    return candidates[0] || null;
-  }
-
-  function click(selectors) {
-    const btn = pickBest(selectors);
-    if (btn) {
-      btn.click();
-      return true;
+    if (site === "apple") {
+      return {
+        play: [
+          ".chrome-player__playback-controls button.playback-play__play",
+          '.chrome-player__playback-controls button[class*="playback-play__play"]',
+          "button.playback-play__play",
+          'button[class*="playback-play__play"]',
+          'button[aria-label="Play"]',
+          'button[title="Play"]',
+          'button[aria-label*="Play"]',
+          'button[title*="Play"]'
+        ],
+        pause: [
+          ".chrome-player__playback-controls button.playback-play__pause",
+          '.chrome-player__playback-controls button[class*="playback-play__pause"]',
+          "button.playback-play__pause",
+          'button[class*="playback-play__pause"]',
+          'button[aria-label="Pause"]',
+          'button[title="Pause"]',
+          'button[aria-label*="Pause"]',
+          'button[title*="Pause"]'
+        ],
+        next: [
+          ".chrome-player__playback-controls button.playback-next__next",
+          '.chrome-player__playback-controls button[class*="playback-next__next"]',
+          "button.skip-control__next",
+          'button[class*="skip-control__next"]',
+          "button.playback-controls__next",
+          'button[class*="playback-controls__next"]',
+          'button[aria-label="Next"]',
+          'button[title="Next"]',
+          'button[aria-label*="Next"]',
+          'button[title*="Next"]'
+        ]
+      };
     }
+
+    return { play: [], pause: [], next: [] };
+  }
+
+  async function waitForPlaybackProgress(
+    media,
+    startTime,
+    selectors,
+    site,
+    timeoutMs = 1200
+  ) {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      if (site === "apple" && hasPrimaryPauseControl(site, selectors)) {
+        return true;
+      }
+
+      if (site === "tidal" && hasPrimaryPauseControl(site, selectors)) {
+        return true;
+      }
+
+      if (!media || media.ended) {
+        return false;
+      }
+
+      if (!media.paused && media.currentTime > startTime + 0.05) {
+        return true;
+      }
+    }
+
     return false;
   }
 
-  function isAppleUIPlaying(selectors) {
-    const pauseBtn = pickBest(selectors.pause);
-    return !!pauseBtn;
-  }
-
   async function tryResume(media, selectors, site) {
-    log("Trying resume...");
+    if (media?.ended) {
+      log("Media ended -> skipping next");
+      return clickIfFound(selectors.next);
+    }
 
+    let activeMedia = media;
+    const startTime = activeMedia?.currentTime || 0;
+
+    // ב-Apple מעדיפים קודם UI control מדויק
     if (site === "apple") {
-      if (click(selectors.play)) return true;
+      const clickedPlay = clickIfFound(selectors.play);
+      if (clickedPlay) {
+        log("Apple Music: tried player control before media.play()");
+        const progressedAfterClick = await waitForPlaybackProgress(
+          activeMedia,
+          startTime,
+          selectors,
+          site
+        );
+        if (progressedAfterClick) {
+          log("Playback progress confirmed after Apple player click");
+          return true;
+        }
+
+        log("Apple player click did not produce playback progress");
+      }
     }
 
     try {
-      await media?.play();
-      return true;
-    } catch {}
+      if (!activeMedia || !activeMedia.isConnected) {
+        activeMedia = findMedia();
+      }
 
-    return click(selectors.play);
+      if (!activeMedia) {
+        throw new Error("No media element available");
+      }
+
+      await activeMedia.play();
+      log("media.play() succeeded");
+
+      const progressed = await waitForPlaybackProgress(
+        activeMedia,
+        activeMedia.currentTime || startTime,
+        selectors,
+        site
+      );
+      if (progressed) {
+        log("Playback progress confirmed after media.play()");
+        return true;
+      }
+
+      log("media.play() resolved but playback did not progress");
+    } catch (err) {
+      log("media.play() failed:", err?.message || err);
+
+      if (
+        site === "apple" &&
+        /removed from the document|The play\(\) request was interrupted/i.test(
+          err?.message || ""
+        )
+      ) {
+        const refreshedMedia = findMedia();
+        if (refreshedMedia && refreshedMedia !== activeMedia) {
+          try {
+            await refreshedMedia.play();
+            log("Retried media.play() with refreshed Apple player");
+
+            const progressed = await waitForPlaybackProgress(
+              refreshedMedia,
+              refreshedMedia.currentTime || 0,
+              selectors,
+              site
+            );
+            if (progressed) {
+              log("Playback progress confirmed after refreshed Apple player");
+              return true;
+            }
+          } catch (retryErr) {
+            log("Refreshed media.play() failed:", retryErr?.message || retryErr);
+          }
+        }
+      }
+    }
+
+    // ב-TIDAL וביתר fallback: לנסות כפתור play
+    return clickIfFound(selectors.play);
+  }
+
+  function tryNext(selectors) {
+    return clickIfFound(selectors.next);
   }
 
   async function tick() {
-    if (!settings.enabled || document.hidden) return;
-
-    const now = Date.now();
-    const site = getSiteType();
-    const media = findMedia();
-    const selectors = getSelectors(site);
-
-    const appleUIPlaying = site === "apple" && isAppleUIPlaying(selectors);
-
-    if (appleUIPlaying) {
-      lastAppleUiPlayingAt = now;
-    }
-
-    // ✅ FIXED LOGIC (UI priority)
-    if (site === "apple" && appleUIPlaying && now - lastAppleUiPlayingAt >= 1500) {
-      lastPlayingAt = now;
-
-      if (media && media.currentTime !== lastCurrentTime) {
-        lastCurrentTime = media.currentTime;
-        lastProgressAt = now;
-      }
-
-      showBadge("");
-      log("Apple UI stable playback");
+    if (tickInFlight) {
+      log("Skipping tick: previous tick still running");
       return;
     }
 
-    const playing = isActuallyPlaying(media);
-    const stalled = isPlaybackStalled(media, now);
+    if (!settings.enabled) return;
+    if (document.hidden) return;
 
-    if ((playing && !stalled) || (site === "tidal" && playing)) {
-      lastPlayingAt = now;
-      showBadge("");
-      return;
-    }
+    tickInFlight = true;
 
-    if (now - lastActionAt < ACTION_COOLDOWN) return;
+    try {
+      const now = Date.now();
+      const media = findMedia();
+      const site = getSiteType();
+      const selectors = getSelectors(site);
 
-    const resumed = await tryResume(media, selectors, site);
+      const primaryUiPlaying =
+        (site === "apple" || site === "tidal") &&
+        hasPrimaryPauseControl(site, selectors);
 
-    lastActionAt = now;
-
-    if (!resumed) {
-      if (now - lastPlayingAt >= settings.skipAfterSec * 1000) {
-        log("Trying NEXT...");
-        click(selectors.next);
+      if (primaryUiPlaying) {
+        if (lastAppleUiPlayingAt === 0) {
+          lastAppleUiPlayingAt = now;
+        }
+      } else {
+        lastAppleUiPlayingAt = 0;
       }
+
+      if (!media && !primaryUiPlaying) {
+        showBadge("");
+        log("No media element found");
+        return;
+      }
+
+      const stalled = media ? isPlaybackStalled(media, now) : false;
+
+      // התיקון החשוב:
+      // אם ה-UI אומר "מנגן" באופן יציב, לא נהיה תלויים בזה ש-currentTime דווקא השתנה באותו tick.
+      if (
+        (site === "apple" || site === "tidal") &&
+        primaryUiPlaying &&
+        now - lastAppleUiPlayingAt >= 1500
+      ) {
+        lastPlayingAt = now;
+
+        if (media && media.currentTime !== lastCurrentTime) {
+          lastCurrentTime = media.currentTime;
+          lastProgressAt = now;
+        }
+
+        showBadge("");
+        log(`${site} player UI indicates stable playback`);
+        return;
+      }
+
+      if ((isActuallyPlaying(media) || primaryUiPlaying) && !stalled) {
+        if (media) {
+          updateProgressState(media, now);
+        }
+        lastPlayingAt = now;
+        showBadge("");
+        return;
+      }
+
+      if (stalled) {
+        showBadge("STALL");
+        log("Detected stalled playback");
+      }
+
+      if (now - lastActionAt < actionCooldownMs) {
+        return;
+      }
+
+      showBadge("FIX");
+      log("Detected paused/stalled media");
+
+      const resumed = await tryResume(media, selectors, site);
+      lastActionAt = now;
+      actionCooldownMs = site === "apple" ? 8000 : 4000;
+
+      if (resumed) {
+        return;
+      }
+
+      const pausedForMs = now - Math.max(lastPlayingAt, lastProgressAt);
+      if (pausedForMs >= settings.skipAfterSec * 1000) {
+        const skipped = tryNext(selectors);
+        if (skipped) {
+          lastActionAt = Date.now();
+          actionCooldownMs = 8000;
+          showBadge("NEXT");
+        }
+      }
+    } finally {
+      tickInFlight = false;
     }
   }
 
   async function loop() {
-    if (loopActive) return;
-    loopActive = true;
+    if (loopRunning) return;
+    loopRunning = true;
+    stopLoop = false;
 
-    while (settings.enabled) {
+    log("Loop started with settings:", settings);
+
+    while (!stopLoop) {
       await tick();
-      await new Promise(r => setTimeout(r, settings.intervalSec * 1000));
+
+      let sleepMs = Math.max(2000, settings.intervalSec * 1000);
+
+      if (wakeSoon) {
+        wakeSoon = false;
+        sleepMs = Math.min(sleepMs, 1000);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
     }
 
-    loopActive = false;
+    loopRunning = false;
   }
 
-  async function init() {
-    const stored = await chrome.storage.sync.get();
-    settings = { ...DEFAULTS, ...stored };
+  function restartLoop() {
+    stopLoop = true;
 
-    if (settings.enabled) loop();
+    if (!settings.enabled) {
+      log("Loop stopped: extension disabled");
+      return;
+    }
+
+    // נותן ל-loop הקיים להיסגר, ואז מרים חדש
+    setTimeout(() => {
+      if (!loopRunning && settings.enabled) {
+        loop();
+      }
+    }, 0);
   }
 
-  chrome.storage.onChanged.addListener((changes) => {
-    Object.keys(changes).forEach(key => {
-      settings[key] = changes[key].newValue;
-    });
+  loadSettings();
 
-    if (settings.enabled) loop();
+  const observer = new MutationObserver((mutations) => {
+    // לא מזייפים progress, רק מבקשים recheck מהיר אם משהו רלוונטי זז.
+    for (const m of mutations) {
+      if (m.type === "childList") {
+        if (m.addedNodes.length || m.removedNodes.length) {
+          wakeSoon = true;
+          return;
+        }
+      }
+
+      if (
+        m.type === "attributes" &&
+        m.target instanceof Element &&
+        (
+          m.target.matches("audio, video, button") ||
+          m.target.closest?.(".chrome-player__playback-controls")
+        )
+      ) {
+        wakeSoon = true;
+        return;
+      }
+    }
   });
 
-  // ✅ MutationObserver now useful
-  const observer = new MutationObserver(() => {
-    // hint בלבד – מאיץ התאוששות
-    lastProgressAt = Date.now();
-  });
-
-  observer.observe(document.body, {
+  observer.observe(document.documentElement, {
     childList: true,
-    subtree: true
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class", "aria-label", "title", "aria-hidden", "disabled"]
   });
-
-  init();
 })();
