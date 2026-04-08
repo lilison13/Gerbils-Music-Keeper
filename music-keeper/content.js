@@ -127,6 +127,12 @@
     if (site === "apple") {
       const primaryApplePlayer = document.querySelector("#apple-music-player");
       if (primaryApplePlayer instanceof HTMLMediaElement) {
+        const sig = getMediaSignature(primaryApplePlayer);
+
+        if (sig && sig !== lastKnownMediaSignature) {
+          debug("Using primary Apple Music player element");
+        }
+
         rememberMedia(primaryApplePlayer);
         return primaryApplePlayer;
       }
@@ -486,7 +492,7 @@
     return { play: [], pause: [], next: [] };
   }
 
-  async function waitForPlaybackProgress(media, startTime, selectors, site, timeoutMs = 1500) {
+  async function waitForPlaybackProgress(media, startTime, selectors, site, timeoutMs = 2500) {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
@@ -520,7 +526,10 @@
     }
 
     let activeMedia = media;
-    if (!activeMedia || !activeMedia.isConnected) {
+
+    if (site === "apple") {
+      activeMedia = findMedia() || activeMedia;
+    } else if (!activeMedia || !activeMedia.isConnected) {
       activeMedia = findMedia();
     }
 
@@ -675,8 +684,13 @@
 
       const stalled = media ? isPlaybackStalled(media, now) : false;
       const actuallyPlaying = isActuallyPlaying(media);
+      const noProgressMs = now - lastProgressAt;
+      const hardStall =
+        site === "apple" &&
+        uiLooksPlaying &&
+        noProgressMs >= settings.stallThresholdSec * 1000;
 
-      if ((actuallyPlaying || uiLooksPlaying) && !stalled) {
+      if ((actuallyPlaying || uiLooksPlaying) && !stalled && !hardStall) {
         if (media) {
           updateProgressState(media, now);
         }
@@ -687,6 +701,10 @@
 
       if (uiLooksPlaying && stalled) {
         log(`${site} UI says playing, but playback appears stalled`);
+      }
+
+      if (hardStall) {
+        log(`apple hard stall detected: UI says playing, but no progress for ${noProgressMs}ms`);
       }
 
       if (stalled) {
@@ -710,6 +728,17 @@
 
       if (resumed) {
         return;
+      }
+
+      if (site === "apple" && hardStall) {
+        log("Apple hard stall persists after resume attempt, trying NEXT early");
+        const skippedEarly = tryNext(selectors);
+        if (skippedEarly) {
+          lastActionAt = Date.now();
+          actionCooldownMs = 8000;
+          showBadge("NEXT");
+          return;
+        }
       }
 
       const pausedForMs = now - Math.max(lastPlayingAt, lastProgressAt);
