@@ -1,11 +1,11 @@
 (() => {
   const DEFAULTS = {
-  enabled: true,
-  intervalSec: 5,
-  stallThresholdSec: 12,
-  skipAfterSec: 20,
-  log: true,
-  debug: false
+    enabled: true,
+    intervalSec: 5,
+    stallThresholdSec: 12,
+    skipAfterSec: 20,
+    log: true,
+    debug: false
   };
 
   let settings = { ...DEFAULTS };
@@ -25,17 +25,17 @@
   let lastKnownMediaSignature = null;
 
   function log(...args) {
-  if (!settings.log) return;
-  console.log("[MusicKeeper]", ...args);
+    if (!settings.log) return;
+    console.log("[MusicKeeper]", ...args);
   }
 
   function debug(...args) {
-  if (!settings.log || !settings.debug) return;
-  console.log("[MusicKeeper:debug]", ...args);
+    if (!settings.log || !settings.debug) return;
+    console.log("[MusicKeeper:debug]", ...args);
   }
 
   function showBadge(text) {
-  debug("Badge:", text);
+    debug("Badge:", text);
   }
 
   function clampNumber(value, fallback, min, max) {
@@ -192,7 +192,6 @@
       return false;
     }
 
-    // grace period כדי לא להיבהל ממיקרו-buffering
     if (now - lastProgressAt < 3000) {
       return false;
     }
@@ -262,7 +261,6 @@
     const inTopControls = !!el.closest(".chrome-player__playback-controls");
     let score = 0;
 
-    // אם יש top player bar, לא נוגעים בכפתורי רשימה/preview
     if (topPlayerBarPresent && !inTopControls) return -1;
 
     if (rect.top < 120) score += 50;
@@ -369,13 +367,13 @@
     }
 
     if (best) {
-    debug("Best control picked:", {
-    site,
-    bestScore,
-    aria: best.getAttribute("aria-label"),
-    title: best.getAttribute("title"),
-    className: best.className
-    });
+      debug("Best control picked:", {
+        site,
+        bestScore,
+        aria: best.getAttribute("aria-label"),
+        title: best.getAttribute("title"),
+        className: best.className
+      });
     }
 
     return best;
@@ -492,6 +490,40 @@
     return { play: [], pause: [], next: [] };
   }
 
+  function getAppleErrorDialog() {
+    return document.querySelector(
+      'article.error-modal__container, dialog, [role="dialog"]'
+    );
+  }
+
+  function hasAppleErrorModal() {
+    const dialog = getAppleErrorDialog();
+    if (!dialog) return false;
+
+    const text = (dialog.innerText || dialog.textContent || "").toLowerCase();
+    return text.includes("an error occurred") || text.includes("something went wrong");
+  }
+
+  function closeAppleErrorModal() {
+    const dialog = getAppleErrorDialog();
+    if (!dialog) return false;
+
+    const buttons = [...dialog.querySelectorAll('button, [role="button"]')];
+
+    const okButton = buttons.find((btn) => {
+      const text = (btn.innerText || btn.textContent || "").trim().toLowerCase();
+      return text === "ok";
+    });
+
+    if (okButton) {
+      okButton.click();
+      log("Closed Apple error modal via OK button");
+      return true;
+    }
+
+    return false;
+  }
+
   async function waitForPlaybackProgress(media, startTime, selectors, site, timeoutMs = 2500) {
     const deadline = Date.now() + timeoutMs;
 
@@ -535,7 +567,6 @@
 
     const startTime = activeMedia?.currentTime || 0;
 
-    // Apple: קודם מנסים UI control מדויק
     if (site === "apple") {
       const clickedPlay = clickIfFound(selectors.play);
       if (clickedPlay) {
@@ -613,7 +644,6 @@
       }
     }
 
-    // fallback גם ל-TIDAL וגם ל-Apple אחרי כל הניסיונות
     const clickedFallback = clickIfFound(selectors.play);
     if (clickedFallback) {
       const currentMedia = findMedia();
@@ -654,6 +684,32 @@
       let media = findMedia();
       const selectors = getSelectors(site);
 
+      if (site === "apple" && hasAppleErrorModal()) {
+        log("Apple fatal error modal detected");
+
+        const closed = closeAppleErrorModal();
+        if (closed) {
+          showBadge("OK");
+
+          await new Promise((resolve) => setTimeout(resolve, 700));
+
+          const skippedAfterModal = tryNext(selectors);
+          if (skippedAfterModal) {
+            lastActionAt = Date.now();
+            actionCooldownMs = 8000;
+            showBadge("NEXT");
+            log("Clicked NEXT after closing Apple error modal");
+            return;
+          }
+
+          log("Closed Apple error modal, but NEXT control was not found");
+          return;
+        }
+
+        log("Apple error modal detected, but OK button was not found");
+        return;
+      }
+
       const primaryUiPlaying =
         (site === "apple" || site === "tidal") &&
         hasPrimaryPauseControl(site, selectors);
@@ -677,7 +733,6 @@
         primaryUiPlaying &&
         now - lastUiPlayingAt >= 1500;
 
-      // UI הוא hint בלבד. מעדכנים progress אם באמת זז, אבל לא עושים return רק בגלל UI.
       if (uiLooksPlaying && media) {
         updateProgressState(media, now);
       }
