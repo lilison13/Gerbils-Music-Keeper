@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Music Keeper",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Tries to resume playback or skip to the next track on Apple Music and TIDAL.",
   "permissions": ["storage"],
   "host_permissions": [
