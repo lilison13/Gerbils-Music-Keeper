@@ -233,6 +233,13 @@
     );
   }
 
+  function isEnabledElement(el) {
+    if (!el) return false;
+    if (el.hasAttribute("disabled")) return false;
+    if (el.getAttribute("aria-disabled") === "true") return false;
+    return true;
+  }
+
   function getCandidateButtons(selectors) {
     const out = [];
     const seen = new Set();
@@ -254,7 +261,7 @@
   }
 
   function scoreAppleControl(el) {
-    if (!isVisibleElement(el)) return -1;
+    if (!isVisibleElement(el) || !isEnabledElement(el)) return -1;
 
     const rect = el.getBoundingClientRect();
     const topPlayerBarPresent = hasAppleTopPlayerBar();
@@ -322,7 +329,7 @@
   }
 
   function scoreTidalControl(el) {
-    if (!isVisibleElement(el)) return -1;
+    if (!isVisibleElement(el) || !isEnabledElement(el)) return -1;
 
     const rect = el.getBoundingClientRect();
     let score = 0;
@@ -416,6 +423,24 @@
     return false;
   }
 
+  async function tryNextWithRetry(selectors, attempts = 6, delayMs = 500) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const clicked = clickIfFound(selectors.next);
+      if (clicked) {
+        if (attempt > 1) {
+          log(`Clicked NEXT on retry ${attempt}/${attempts}`);
+        }
+        return true;
+      }
+
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    return false;
+  }
+
   function getSelectors(site) {
     if (site === "tidal") {
       return {
@@ -482,7 +507,11 @@
           'button[aria-label="Next"]',
           'button[title="Next"]',
           'button[aria-label*="Next"]',
-          'button[title*="Next"]'
+          'button[title*="Next"]',
+          'button[aria-label*="Skip"]',
+          'button[title*="Skip"]',
+          '[data-testid*="next"]',
+          '[data-test*="next"] button'
         ]
       };
     }
@@ -693,7 +722,7 @@
 
           await new Promise((resolve) => setTimeout(resolve, 700));
 
-          const skippedAfterModal = tryNext(selectors);
+          const skippedAfterModal = await tryNextWithRetry(selectors, 8, 500);
           if (skippedAfterModal) {
             lastActionAt = Date.now();
             actionCooldownMs = 8000;
@@ -702,7 +731,7 @@
             return;
           }
 
-          log("Closed Apple error modal, but NEXT control was not found");
+          log("Closed Apple error modal, but NEXT control was not found after retries");
           return;
         }
 
